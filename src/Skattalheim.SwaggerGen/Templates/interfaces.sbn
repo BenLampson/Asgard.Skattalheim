@@ -1,0 +1,15 @@
+{{- if imports.size > 0 }}
+import type { {{ imports | array.join ', ' }} } from '../types';
+{{ end }}
+{{ for schema in interfaces }}
+{{ if schema.description && schema.description != '' -}}
+/** {{ schema.description }} */
+{{ end -}}export interface {{ schema.name }} {
+  {{- for prop in schema.properties }}
+  {{- if prop.description && prop.description != '' }}
+  /** {{ prop.description }} */
+  {{- end }}
+  {{ prop.name }}{{ if prop.optional }}?{{ end }}: {{ prop.type }};
+  {{- end }}
+}
+{{ end }}

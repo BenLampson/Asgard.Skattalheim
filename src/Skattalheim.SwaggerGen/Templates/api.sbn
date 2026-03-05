@@ -1,0 +1,22 @@
+import request from '{{ request_import }}';
+{{- if imports.size > 0 }}
+import type { {{ imports | array.join ', ' }} } from '../interfaces';
+{{ end }}
+{{ for op in operations }}
+/**
+ {{- if op.summary != '' }}
+ * {{ op.summary }}
+ {{- end }}
+ {{- if op.description != '' && op.description != op.summary }}
+ * {{ op.description }}
+ {{- end }}
+ * @description {{ op.method | string.upcase }} {{ op.path }}
+ {{- for p in op.params }}
+ * @param {{ '{' }}{{ p.type }}{{ '}' }} {{ if p.optional }}[{{ p.name }}]{{ else }}{{ p.name }}{{ end }}{{ if p.source == 'path' }} - 路径参数{{ else if p.source == 'query' }} - 查询参数{{ else if p.source == 'body' }} - 请求体{{ end }}
+ {{- end }}
+ * @returns {Promise<{{ op.return_type }}>}
+ */
+export const {{ op.function_name }} = async ({{ op.params_signature }}): Promise<{{ op.return_type }}> => {
+  return request.{{ op.method }}({{ op.url_expression }}{{ op.axios_config }});
+};
+{{ end }}
