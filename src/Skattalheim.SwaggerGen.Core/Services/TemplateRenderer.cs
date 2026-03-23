@@ -1,7 +1,7 @@
-using Skattalheim.SwaggerGen.Models;
+using Skattalheim.SwaggerGen.Core.Models;
 using Scriban;
 
-namespace Skattalheim.SwaggerGen.Services;
+namespace Skattalheim.SwaggerGen.Core.Services;
 
 /// <summary>
 /// 模板渲染器，用于将解析后的 Swagger 模型渲染为 TypeScript 代码

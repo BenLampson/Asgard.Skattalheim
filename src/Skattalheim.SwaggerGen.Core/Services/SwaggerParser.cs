@@ -1,7 +1,7 @@
-﻿using Skattalheim.SwaggerGen.Models;
+using Skattalheim.SwaggerGen.Core.Models;
 using System.Text.Json;
 
-namespace Skattalheim.SwaggerGen.Services;
+namespace Skattalheim.SwaggerGen.Core.Services;
 
 /// <summary>
 /// Swagger 解析器，用于解析 Swagger/OpenAPI 规范并生成 TypeScript 代码模型
