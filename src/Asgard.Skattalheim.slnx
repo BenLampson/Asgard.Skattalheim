@@ -1,1 +1,5 @@
-<Solution />
+<Solution>
+  <Project Path="Skattalheim.SwaggerGen.Core\Skattalheim.SwaggerGen.Core.csproj" />
+  <Project Path="Skattalheim.SwaggerGen\Skattalheim.SwaggerGen.csproj" />
+  <Project Path="Skattalheim.SwaggerGen.Web\Skattalheim.SwaggerGen.Web.csproj" />
+</Solution>

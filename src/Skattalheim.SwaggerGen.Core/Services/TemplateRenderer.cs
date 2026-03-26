@@ -62,24 +62,70 @@ public static class TemplateRenderer
 
 """;
 
-        // 1. 渲染 interfaces/index.ts
+        // 1. 按分组渲染 interfaces 目录下的文件
+        var interfaceGroups = interfaces.GroupBy(i => i.Group).ToDictionary(g => g.Key, g => g.ToList());
+        var interfaceFiles = new List<string>();
+        foreach (var group in interfaceGroups)
         {
+            var groupName = group.Key;
+            var groupInterfaces = group.Value;
+            
+            // 生成文件名，添加 interface 前缀
+            var fileName = "interface" + SwaggerParser.ToPascalCase(groupName);
+            // 移除所有非字母数字字符
+            fileName = new string(fileName.Where(char.IsLetterOrDigit).ToArray());
+            // 确保首字母小写
+            if (fileName.Length > 0)
+                fileName = char.ToLower(fileName[0]) + fileName.Substring(1);
+            fileName += ".ts";
+            
             var tpl    = LoadTemplate("interfaces.sbn");
-            var model  = new { interfaces, imports = typeNames.Where(t => interfaces.SelectMany(i => i.Properties).Any(p => p.Type.Contains(t))).Distinct().ToList() };
+            var imports = typeNames.Where(t => groupInterfaces.SelectMany(i => i.Properties).Any(p => p.Type.Contains(t))).Distinct().ToList();
+            var model  = new { interfaces = groupInterfaces, imports };
             var result = Template.Parse(tpl).Render(model, m => ToScribanKey(m.Name));
-            await WriteFile(Path.Combine(outputDir, "interfaces", "index.ts"), header + result);
+            await WriteFile(Path.Combine(outputDir, "interfaces", fileName), header + result);
+            interfaceFiles.Add(fileName);
         }
 
-        // 2. 渲染 types/index.ts
+        // 2. 渲染 interfaces/index.ts
         {
-            var tpl    = LoadTemplate("types.sbn");
-            var model  = new { types };
-            var result = Template.Parse(tpl).Render(model, m => ToScribanKey(m.Name));
-            await WriteFile(Path.Combine(outputDir, "types", "index.ts"), header + result);
+            var indexContent = string.Join("\n", interfaceFiles.Select(f => $"export * from './{Path.GetFileNameWithoutExtension(f)}';"));
+            await WriteFile(Path.Combine(outputDir, "interfaces", "index.ts"), header + indexContent);
         }
 
-        // 3. 渲染 api/apiAll.ts —— 所有 API 合并到一个文件
-        var apiFile = apiFiles.First();
+        // 3. 按分组渲染 types 目录下的文件
+        var typeGroups = types.GroupBy(t => t.Group).ToDictionary(g => g.Key, g => g.ToList());
+        var typeFiles = new List<string>();
+        foreach (var group in typeGroups)
+        {
+            var groupName = group.Key;
+            var groupTypes = group.Value;
+            
+            // 生成文件名，添加 type 前缀
+            var fileName = "type" + SwaggerParser.ToPascalCase(groupName);
+            // 移除所有非字母数字字符
+            fileName = new string(fileName.Where(char.IsLetterOrDigit).ToArray());
+            // 确保首字母小写
+            if (fileName.Length > 0)
+                fileName = char.ToLower(fileName[0]) + fileName.Substring(1);
+            fileName += ".ts";
+            
+            var tpl    = LoadTemplate("types.sbn");
+            var model  = new { types = groupTypes };
+            var result = Template.Parse(tpl).Render(model, m => ToScribanKey(m.Name));
+            await WriteFile(Path.Combine(outputDir, "types", fileName), header + result);
+            typeFiles.Add(fileName);
+        }
+
+        // 4. 渲染 types/index.ts
+        {
+            var indexContent = string.Join("\n", typeFiles.Select(f => $"export * from './{Path.GetFileNameWithoutExtension(f)}';"));
+            await WriteFile(Path.Combine(outputDir, "types", "index.ts"), header + indexContent);
+        }
+
+        // 3. 渲染 api/ 目录下的所有 API 文件
+        var apiFileNames = new List<string>();
+        foreach (var apiFile in apiFiles)
         {
             var tpl    = LoadTemplate("api.sbn");
             var model  = new
@@ -107,12 +153,13 @@ public static class TemplateRenderer
             };
             var result = Template.Parse(tpl).Render(model, m => ToScribanKey(m.Name));
             await WriteFile(Path.Combine(outputDir, "api", apiFile.FileName + ".ts"), header + result);
+            apiFileNames.Add(apiFile.FileName);
         }
 
         // 4. 渲染 index.ts
         {
             var tplIdx    = LoadTemplate("index.sbn");
-            var modelIdx  = new { apis = new List<string> { apiFile.FileName } };
+            var modelIdx  = new { apis = apiFileNames };
             var resultIdx = Template.Parse(tplIdx).Render(modelIdx, m => ToScribanKey(m.Name));
             await WriteFile(Path.Combine(outputDir, "index.ts"), header + resultIdx);
         }

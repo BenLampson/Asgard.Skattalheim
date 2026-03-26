@@ -12,8 +12,9 @@ public static class SwaggerParser
     /// 解析 Swagger 规范中的 Schemas 部分，生成接口和类型别名
     /// </summary>
     /// <param name="root">Swagger 文档的根元素</param>
+    /// <param name="pathSplit">路径切割的起始位置</param>
     /// <returns>接口模型列表和类型别名模型列表</returns>
-    public static (List<InterfaceModel> Interfaces, List<TypeAliasModel> Types) ParseSchemas(JsonElement root)
+    public static (List<InterfaceModel> Interfaces, List<TypeAliasModel> Types) ParseSchemas(JsonElement root, int pathSplit = 2)
     {
         var interfaces = new List<InterfaceModel>();
         var types      = new List<TypeAliasModel>();
@@ -25,10 +26,99 @@ public static class SwaggerParser
         else if (!root.TryGetProperty("definitions", out schemasEl))
             return (interfaces, types);
 
+        // 收集所有路径信息，用于接口和类型的分组
+        var pathGroups = new Dictionary<string, List<string>>();
+        if (root.TryGetProperty("paths", out var pathsEl))
+        {
+            foreach (var pathProp in pathsEl.EnumerateObject())
+            {
+                var pathStr  = pathProp.Name;
+                var pathSegments = pathStr.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (pathSegments.Length >= pathSplit)
+                {
+                    // 从指定位置开始提取前缀
+                    var startIndex = pathSplit - 1;
+                    var endIndex = Math.Min(startIndex + 2, pathSegments.Length);
+                    var prefixSegments = pathSegments.Skip(startIndex).Take(endIndex - startIndex).ToList();
+                    var groupName = string.Join("_", prefixSegments);
+                    
+                    if (!pathGroups.TryGetValue(groupName, out var paths))
+                    {
+                        paths = new List<string>();
+                        pathGroups[groupName] = paths;
+                    }
+                    paths.Add(pathStr);
+                }
+            }
+        }
+
         foreach (var prop in schemasEl.EnumerateObject())
         {
             var name   = prop.Name;
             var schema = prop.Value;
+
+            // 为接口和类型分配分组
+            var groupName = "default";
+            // 使用与API相同的分组逻辑：根据路径前缀分组
+            if (root.TryGetProperty("paths", out var pathsElForGroup))
+            {
+                foreach (var pathProp in pathsElForGroup.EnumerateObject())
+                {
+                    var pathStr  = pathProp.Name;
+                    var pathSegments = pathStr.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    if (pathSegments.Length >= pathSplit)
+                    {
+                        // 从指定位置开始提取前缀
+                        var startIndex = pathSplit - 1;
+                        var endIndex = Math.Min(startIndex + 2, pathSegments.Length);
+                        var prefixSegments = pathSegments.Skip(startIndex).Take(endIndex - startIndex).ToList();
+                        var currentGroup = string.Join("_", prefixSegments);
+                        
+                        // 检查该路径的操作是否使用了当前模式
+                        var pathItem = pathProp.Value;
+                        var httpMethods = new[] { "get", "post", "put", "delete", "patch", "head", "options" };
+                        foreach (var method in httpMethods)
+                        {
+                            if (!pathItem.TryGetProperty(method, out var operation)) continue;
+                            
+                            // 检查请求体
+                            if (operation.TryGetProperty("requestBody", out var reqBody))
+                            {
+                                var bodySchema = GetJsonContentSchema(reqBody);
+                                if (bodySchema.HasValue)
+                                {
+                                    var bodyType = ResolveType(bodySchema.Value);
+                                    if (bodyType == ToPascalCase(name))
+                                    {
+                                        groupName = currentGroup;
+                                        goto GroupFound;
+                                    }
+                                }
+                            }
+                            
+                            // 检查响应
+                            if (operation.TryGetProperty("responses", out var responses))
+                            {
+                                foreach (var code in new[] { "200", "201" })
+                                {
+                                    if (!responses.TryGetProperty(code, out var resp)) continue;
+                                    var respSchema = GetJsonContentSchema(resp);
+                                    if (respSchema.HasValue)
+                                    {
+                                        var respType = ResolveType(respSchema.Value);
+                                        if (respType == ToPascalCase(name))
+                                        {
+                                            groupName = currentGroup;
+                                            goto GroupFound;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            GroupFound:;
 
             if (IsEnumSchema(schema))
             {
@@ -37,13 +127,16 @@ public static class SwaggerParser
                 types.Add(new TypeAliasModel
                 {
                     Name  = ToPascalCase(name),
-                    Union = values.Count > 0 ? string.Join(" | ", values) : "string"
+                    Union = values.Count > 0 ? string.Join(" | ", values) : "string",
+                    Group = groupName
                 });
             }
             else if (IsObjectSchema(schema))
             {
                 // 解析对象类型，生成接口
-                interfaces.Add(BuildInterface(name, schema));
+                var interfaceModel = BuildInterface(name, schema);
+                interfaceModel.Group = groupName;
+                interfaces.Add(interfaceModel);
             }
         }
 
@@ -57,26 +150,23 @@ public static class SwaggerParser
     /// <param name="requestImport">Axios 封装导入路径</param>
     /// <param name="interfaces">接口模型列表</param>
     /// <param name="types">类型别名模型列表</param>
+    /// <param name="pathSplit">路径切割的起始位置</param>
     /// <returns>API 文件模型列表</returns>
     public static List<ApiFileModel> ParseOperations(
         JsonElement root,
         string requestImport,
         List<InterfaceModel> interfaces,
-        List<TypeAliasModel> types)
+        List<TypeAliasModel> types,
+        int pathSplit = 2)
     {
         var knownInterfaces = interfaces.Select(i => i.Name).ToHashSet();
         var knownTypes      = types.Select(t => t.Name).ToHashSet();
 
-        var apiFile = new ApiFileModel
-        {
-            TagName       = "all",
-            FileName      = "apiAll",
-            RequestImport = requestImport,
-        };
+        var apiFiles = new Dictionary<string, ApiFileModel>();
         var opIdCounter = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         if (!root.TryGetProperty("paths", out var pathsEl))
-            return new List<ApiFileModel> { apiFile };
+            return new List<ApiFileModel>();
 
         var httpMethods = new[] { "get", "post", "put", "delete", "patch", "head", "options" };
 
@@ -98,6 +188,38 @@ public static class SwaggerParser
                 if (operation.TryGetProperty("parameters", out var opParams))
                     allParams.AddRange(opParams.EnumerateArray());
 
+                // 从路径中提取前缀作为分组依据
+                var prefix = "default";
+                var pathSegments = pathStr.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (pathSegments.Length >= pathSplit)
+                {
+                    // 从指定位置开始提取前缀
+                    var startIndex = pathSplit - 1;
+                    var endIndex = Math.Min(startIndex + 2, pathSegments.Length);
+                    var prefixSegments = pathSegments.Skip(startIndex).Take(endIndex - startIndex).ToList();
+                    prefix = string.Join("_", prefixSegments);
+                }
+
+                // 确保前缀对应的文件模型存在
+                if (!apiFiles.TryGetValue(prefix, out var apiFile))
+                {
+                    // 生成文件名，添加 api 前缀
+                    var fileName = "api" + ToPascalCase(prefix);
+                    // 移除所有非字母数字字符
+                    fileName = new string(fileName.Where(char.IsLetterOrDigit).ToArray());
+                    // 确保首字母小写
+                    if (fileName.Length > 0)
+                        fileName = char.ToLower(fileName[0]) + fileName.Substring(1);
+
+                    apiFile = new ApiFileModel
+                    {
+                        TagName       = prefix,
+                        FileName      = fileName,
+                        RequestImport = requestImport,
+                    };
+                    apiFiles[prefix] = apiFile;
+                }
+
                 var opModel = BuildOperation(pathStr, method, operation, allParams, knownInterfaces, knownTypes, opIdCounter);
                 apiFile.Operations.Add(opModel);
 
@@ -108,7 +230,7 @@ public static class SwaggerParser
             }
         }
 
-        return new List<ApiFileModel> { apiFile };
+        return apiFiles.Values.ToList();
     }
 
     /// <summary>
@@ -222,21 +344,6 @@ public static class SwaggerParser
             paramInfos.Add(new ParamInfo { Name = pName, Type = pType, Optional = false, Source = "path" });
         }
 
-        // 处理查询参数
-        if (queryParams.Count > 0)
-        {
-            var fields = queryParams.Select(p =>
-            {
-                var pName     = ToCamelCase(GetStr(p, "name") ?? "param");
-                var pType     = p.TryGetProperty("schema", out var ps) ? ResolveType(ps) : "string";
-                var pOptional = !(p.TryGetProperty("required", out var pr) && pr.GetBoolean());
-                return $"{pName}{(pOptional ? "?" : "")}: {pType}";
-            }).ToList();
-            var inlineType = "{ " + string.Join("; ", fields) + " }";
-            sigParts.Add($"params?: {inlineType}");
-            paramInfos.Add(new ParamInfo { Name = "params", Type = inlineType, Optional = true, Source = "query" });
-        }
-
         // 处理请求体
         string? bodyTypeName = null;
         if (operation.TryGetProperty("requestBody", out var reqBody))
@@ -248,6 +355,51 @@ public static class SwaggerParser
                 sigParts.Add($"data: {bodyTypeName}");
                 CollectImport(bodyTypeName, knownInterfaces, knownTypes, imports);
                 paramInfos.Add(new ParamInfo { Name = "data", Type = bodyTypeName, Optional = false, Source = "body" });
+            }
+        }
+
+        // 处理查询参数
+        if (queryParams.Count > 0)
+        {
+            // 检查是否有单个查询参数是一个对象引用
+            if (queryParams.Count == 1)
+            {
+                var p = queryParams[0];
+                if (p.TryGetProperty("schema", out var ps) && ps.TryGetProperty("$ref", out var refVal))
+                {
+                    var queryTypeName = RefToName(refVal.GetString());
+                    sigParts.Add($"params?: {queryTypeName}");
+                    paramInfos.Add(new ParamInfo { Name = "params", Type = queryTypeName, Optional = true, Source = "query" });
+                    CollectImport(queryTypeName, knownInterfaces, knownTypes, imports);
+                }
+                else
+                {
+                    // 构建内联类型
+                    var fields = queryParams.Select(p =>
+                    {
+                        var pName     = ToCamelCase(GetStr(p, "name") ?? "param");
+                        var pType     = p.TryGetProperty("schema", out var ps) ? ResolveType(ps) : "string";
+                        var pOptional = !(p.TryGetProperty("required", out var pr) && pr.GetBoolean());
+                        return $"{pName}{(pOptional ? "?" : "")}: {pType}";
+                    }).ToList();
+                    var inlineType = "{ " + string.Join("; ", fields) + " }";
+                    sigParts.Add($"params?: {inlineType}");
+                    paramInfos.Add(new ParamInfo { Name = "params", Type = inlineType, Optional = true, Source = "query" });
+                }
+            }
+            else
+            {
+                // 构建内联类型
+                var fields = queryParams.Select(p =>
+                {
+                    var pName     = ToCamelCase(GetStr(p, "name") ?? "param");
+                    var pType     = p.TryGetProperty("schema", out var ps) ? ResolveType(ps) : "string";
+                    var pOptional = !(p.TryGetProperty("required", out var pr) && pr.GetBoolean());
+                    return $"{pName}{(pOptional ? "?" : "")}: {pType}";
+                }).ToList();
+                var inlineType = "{ " + string.Join("; ", fields) + " }";
+                sigParts.Add($"params?: {inlineType}");
+                paramInfos.Add(new ParamInfo { Name = "params", Type = inlineType, Optional = true, Source = "query" });
             }
         }
 

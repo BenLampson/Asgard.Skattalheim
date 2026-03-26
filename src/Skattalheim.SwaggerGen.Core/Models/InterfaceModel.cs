@@ -19,6 +19,11 @@ public class InterfaceModel
     /// 接口属性列表
     /// </summary>
     public List<PropertyModel> Properties { get; set; } = [];
+    
+    /// <summary>
+    /// 接口分组
+    /// </summary>
+    public string Group { get; set; } = "default";
 }
 
 /// <summary>

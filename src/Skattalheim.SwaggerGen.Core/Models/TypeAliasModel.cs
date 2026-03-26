@@ -14,4 +14,9 @@ public class TypeAliasModel
     /// 联合类型字符串（例如：'value1' | 'value2'）
     /// </summary>
     public string Union { get; set; } = "unknown";
+    
+    /// <summary>
+    /// 类型分组
+    /// </summary>
+    public string Group { get; set; } = "default";
 }
